@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Çevrenizi algılamak ve nesneleri tanımlamak için kamera erişimi gereklidir</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Algılanan nesneleri sesli olarak bildirmek için mikrofon izni gereklidir</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Sesli geri bildirim sağlamak için konuşma izni gereklidir</string>
 </dict>
 </plist>
