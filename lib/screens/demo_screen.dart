@@ -6,6 +6,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import '../models/detection_result.dart';
 import '../utils/bounding_box_painter.dart';
 
+
 /// Modern Demo Screen with Voice Feedback
 /// Features: TTS, animations, glassmorphism design, haptic feedback
 class DemoScreen extends StatefulWidget {

@@ -35,7 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   camera: ^0.11.0+2
-  tflite_flutter: ^0.10.4
+  tflite_flutter: ^0.12.1
   flutter_tts: ^4.0.2
   permission_handler: ^11.3.1
   image: ^4.1.7
@@ -56,11 +56,10 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/models/yolov5s.tflite
 
   # Assets for TFLite model and labels
   # NOT: Model dosyasını indirdikten sonra bu satırları aktif edin
