@@ -5,17 +5,11 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img_lib;
+
 import '../utils/bounding_box_painter.dart';
 import '../utils/detection_helper.dart';
 import '../models/detection_result.dart';
 
-/// Real-Time Object Detection Screen for Visually Impaired Users
-///
-/// This screen implements a complete object detection pipeline with:
-/// - Camera streaming
-/// - YOLO TFLite inference
-/// - Accessibility-first UI design
-/// - Text-to-Speech feedback
 class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
 
@@ -23,382 +17,395 @@ class ObjectDetectionScreen extends StatefulWidget {
   State<ObjectDetectionScreen> createState() => _ObjectDetectionScreenState();
 }
 
-class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
-  // ========== STEP 1: Initialization Variables ==========
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
+    with WidgetsBindingObserver {
   CameraController? _cameraController;
   Interpreter? _interpreter;
   FlutterTts? _flutterTts;
 
   bool _isModelLoaded = false;
   bool _isCameraReady = false;
+
   bool _isDetecting = false;
   bool _isStreamActive = false;
 
-  // Detection state
+  bool _initStarted = false;
+
   List<DetectionResult> _detections = [];
   String _currentStatusText = 'Başlatılıyor...';
   bool _isLightSufficient = true;
 
-  // TTS Debouncing (Step 11)
+  // TTS Debouncing
   final Map<String, DateTime> _lastSpoken = {};
   static const Duration _speakDebounceTime = Duration(seconds: 2);
 
-  // Camera and model constants
-  static const int _inputSize = 416;
-  static const double _confidenceThreshold = 0.5;
+  // Performance / model
+  static const int _inputSize = 320;
+  static const double _confidenceThreshold = 0.25;
   static const double _iouThreshold = 0.45;
-  static const int _lightThreshold = 50;
+  static const int _lightThreshold = 35;
+
+  // Throttle
+  DateTime _lastInference = DateTime.fromMillisecondsSinceEpoch(0);
+  static const int _minInferenceGapMs = 250;
+
+  bool _printedInfoOnce = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeApp();
   }
 
-  /// STEP 1: Initialize CameraController, TFLite Model, and FlutterTTS
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // ❗️ÖNEMLİ: burada _safeStopAll çağırma.
+    // Yoksa tekrar başlatmayı kilitlersin.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _stopDetection(); // sadece stream kapat
+    }
+  }
+
   Future<void> _initializeApp() async {
+    if (_initStarted) return;
+    _initStarted = true;
+
     try {
-      // Request camera permission
-      final cameraStatus = await Permission.camera.request();
-      if (!cameraStatus.isGranted) {
-        setState(() {
-          _currentStatusText = 'Kamera izni gerekli';
-        });
+      final camPerm = await Permission.camera.request();
+      if (!camPerm.isGranted) {
+        if (!mounted) return;
+        setState(() => _currentStatusText = 'Kamera izni gerekli');
         return;
       }
 
-      // Initialize TTS first for feedback
       await _initializeTTS();
-
-      // Initialize camera
       await _initializeCamera();
-
-      // Load TFLite model
       await _loadTFLiteModel();
 
-      // Start detection automatically
-      if (_isCameraReady && _isModelLoaded) {
-        _startDetection();
-      }
+      if (!mounted) return;
+      setState(() => _currentStatusText = 'Hazır. Başlat’a basın');
     } catch (e) {
-      setState(() {
-        _currentStatusText = 'Başlatma hatası: $e';
-      });
-      _speak('Uygulama başlatılamadı');
+      if (mounted) setState(() => _currentStatusText = 'Başlatma hatası: $e');
+      _speakSafe('Uygulama başlatılamadı');
     }
   }
 
-  /// Initialize Text-to-Speech engine
   Future<void> _initializeTTS() async {
     _flutterTts = FlutterTts();
-
     await _flutterTts!.setLanguage('tr-TR');
-    await _flutterTts!.setSpeechRate(0.5); // Slower for clarity
+    await _flutterTts!.setSpeechRate(0.5);
     await _flutterTts!.setVolume(1.0);
     await _flutterTts!.setPitch(1.0);
-
-    // iOS specific settings
-    await _flutterTts!
-        .setIosAudioCategory(IosTextToSpeechAudioCategory.ambient, [
-          IosTextToSpeechAudioCategoryOptions.allowBluetooth,
-          IosTextToSpeechAudioCategoryOptions.allowBluetoothA2DP,
-          IosTextToSpeechAudioCategoryOptions.mixWithOthers,
-          IosTextToSpeechAudioCategoryOptions.duckOthers,
-        ], IosTextToSpeechAudioMode.voicePrompt);
   }
 
-  /// Initialize camera controller
   Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) {
-      setState(() {
-        _currentStatusText = 'Kamera bulunamadı';
-      });
+    final cams = await availableCameras();
+    if (cams.isEmpty) {
+      if (!mounted) return;
+      setState(() => _currentStatusText = 'Kamera bulunamadı');
       return;
     }
 
-    // Use back camera for object detection
-    final camera = cameras.firstWhere(
-      (cam) => cam.lensDirection == CameraLensDirection.back,
-      orElse: () => cameras.first,
+    final cam = cams.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.back,
+      orElse: () => cams.first,
     );
 
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.medium,
+    final controller = CameraController(
+      cam,
+      ResolutionPreset.low,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420, // Efficient for processing
+      imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
-    await _cameraController!.initialize();
+    _cameraController = controller;
+    await controller.initialize();
 
+    if (!mounted) return;
     setState(() {
       _isCameraReady = true;
       _currentStatusText = 'Kamera hazır';
     });
   }
 
-  /// Load YOLO TFLite model
   Future<void> _loadTFLiteModel() async {
     try {
-      // IMPORTANT: Place your YOLO model file in assets/models/yolov5s.tflite
-      // Update pubspec.yaml to include:
-      // flutter:
-      //   assets:
-      //     - assets/models/yolov5s.tflite
-      //     - assets/models/labels.txt
-
+      final options = InterpreterOptions()..threads = 4;
       _interpreter = await Interpreter.fromAsset(
         'assets/models/yolov5s.tflite',
+        options: options,
       );
 
+      if (!mounted) return;
       setState(() {
         _isModelLoaded = true;
         _currentStatusText = 'Model yüklendi';
       });
 
-      _speak('Nesne algılama hazır');
+      _speakSafe('Hazır');
     } catch (e) {
-      setState(() {
-        _currentStatusText = 'Model yüklenemedi: $e';
-      });
-      _speak('Model dosyası bulunamadı');
+      if (mounted) setState(() => _currentStatusText = 'Model yüklenemedi: $e');
+      _speakSafe('Model dosyası bulunamadı');
     }
   }
 
-  /// STEP 3: Start image stream and detection loop
   void _startDetection() {
-    if (!_isCameraReady || !_isModelLoaded || _isStreamActive) return;
+    debugPrint('FAB: start pressed');
+
+    if (!_isCameraReady || !_isModelLoaded) {
+      debugPrint('Start blocked: camera=$_isCameraReady model=$_isModelLoaded');
+      setState(() => _currentStatusText = 'Hazır değil (kamera/model)');
+      return;
+    }
+
+    final controller = _cameraController;
+    if (controller == null) {
+      setState(() => _currentStatusText = 'Kamera yok');
+      return;
+    }
+
+    if (!controller.value.isInitialized) {
+      debugPrint('Start blocked: camera not initialized');
+      setState(() => _currentStatusText = 'Kamera initialize değil');
+      return;
+    }
+
+    if (_isStreamActive) {
+      debugPrint('Start blocked: stream already active');
+      return;
+    }
 
     setState(() {
       _isStreamActive = true;
       _currentStatusText = 'Algılama aktif';
+      _detections.clear();
     });
 
-    _speak('Algılama başlatıldı');
+    _speakSafe('Algılama başlatıldı');
+    _lastInference = DateTime.fromMillisecondsSinceEpoch(0);
 
-    _cameraController!.startImageStream((CameraImage image) {
-      if (!_isDetecting && _isStreamActive) {
+    try {
+      controller.startImageStream((CameraImage image) async {
+        if (!mounted) return;
+        if (!_isStreamActive) return;
+        if (_isDetecting) return;
+
+        final now = DateTime.now();
+        if (now.difference(_lastInference).inMilliseconds < _minInferenceGapMs) {
+          return;
+        }
+        _lastInference = now;
+
         _isDetecting = true;
-        _processImage(image);
-      }
-    });
+        await _processImage(image);
+        _isDetecting = false;
+      });
+
+      debugPrint('Stream started OK');
+    } catch (e) {
+      debugPrint('startImageStream failed: $e');
+      setState(() {
+        _isStreamActive = false;
+        _currentStatusText = 'Stream açılamadı: $e';
+      });
+    }
   }
 
-  /// STEP 13: Stop detection
-  void _stopDetection() {
+  Future<void> _stopDetection() async {
     if (!_isStreamActive) return;
 
+    debugPrint('FAB: stop pressed');
     setState(() {
       _isStreamActive = false;
       _currentStatusText = 'Algılama durduruldu';
       _detections.clear();
     });
 
-    _cameraController?.stopImageStream();
-    _speak('Algılama durduruldu');
-  }
-
-  /// STEP 4-12: Complete detection pipeline
-  Future<void> _processImage(CameraImage image) async {
     try {
-      // STEP 4: Light control - Check luminance
-      final averageLuminance = _calculateAverageLuminance(image);
-
-      if (averageLuminance < _lightThreshold) {
-        setState(() {
-          _isLightSufficient = false;
-          _currentStatusText = 'Ortam çok karanlık';
-        });
-        _speakWithDebounce('environment_dark', 'Ortam çok karanlık');
-        _isDetecting = false;
-        return;
-      } else if (!_isLightSufficient) {
-        setState(() {
-          _isLightSufficient = true;
-        });
-      }
-
-      // STEP 5: Pre-processing (in Isolate for performance)
-      // Convert CameraImage to processable format
-      final inputTensor = await _preprocessImageInIsolate(image);
-
-      // STEP 6 & 7: Run inference and parse output
-      final output = _runInference(inputTensor);
-
-      // STEP 8: Post-processing with NMS
-      final detections = DetectionHelper.parseYoloOutput(
-        output,
-        _inputSize,
-        image.width,
-        image.height,
-        _confidenceThreshold,
-      );
-
-      final nmsDetections = DetectionHelper.nonMaxSuppression(
-        detections,
-        _iouThreshold,
-      );
-
-      // STEP 9: Prioritization
-      final prioritizedDetections = DetectionHelper.prioritizeDetections(
-        nmsDetections,
-      );
-
-      // Update UI with detections
-      setState(() {
-        _detections = prioritizedDetections;
-        if (_detections.isNotEmpty) {
-          // STEP 10: Translation happens in DetectionHelper
-          final topObject = _detections.first;
-          _currentStatusText = topObject.turkishLabel;
-        } else {
-          _currentStatusText = 'Nesne algılanmadı';
-        }
-      });
-
-      // STEP 11: TTS with debouncing
-      if (prioritizedDetections.isNotEmpty) {
-        _announceDetections(prioritizedDetections);
+      final controller = _cameraController;
+      if (controller != null && controller.value.isStreamingImages) {
+        await controller.stopImageStream();
       }
     } catch (e) {
+      debugPrint('stopImageStream err: $e');
+    }
+
+    _speakWithDebounce('stopped', 'Algılama durduruldu');
+  }
+
+  Future<void> _processImage(CameraImage image) async {
+    try {
+      final avg = _calculateAverageLuminance(image);
+
+      if (avg < _lightThreshold) {
+        if (_isLightSufficient) {
+          setState(() {
+            _isLightSufficient = false;
+            _currentStatusText = 'Ortam çok karanlık';
+            _detections.clear();
+          });
+        }
+        _speakWithDebounce('environment_dark', 'Ortam çok karanlık');
+        return;
+      } else if (!_isLightSufficient) {
+        setState(() => _isLightSufficient = true);
+      }
+
+      final interpreter = _interpreter;
+      if (interpreter == null) return;
+
+      final input = _preprocessToFloat32(image);
+      final output = _runInferenceDynamic(interpreter, input);
+
+      final detections = DetectionHelper.parseYoloOutputDynamic(
+        output,
+        inputSize: _inputSize,
+        originalWidth: image.width,
+        originalHeight: image.height,
+        confThreshold: _confidenceThreshold,
+      );
+
+      final nms = DetectionHelper.nonMaxSuppression(detections, _iouThreshold);
+      final prioritized = DetectionHelper.prioritizeDetections(nms);
+
+      if (!mounted) return;
+      setState(() {
+        _detections = prioritized;
+        _currentStatusText = prioritized.isNotEmpty
+            ? prioritized.first.turkishLabel
+            : 'Nesne algılanmadı';
+      });
+
+      if (prioritized.isNotEmpty) _announceDetections(prioritized);
+    } catch (e) {
       debugPrint('Detection error: $e');
-    } finally {
-      _isDetecting = false;
     }
   }
 
-  /// STEP 4: Calculate average luminance from Y plane (YUV420)
   int _calculateAverageLuminance(CameraImage image) {
-    final yPlane = image.planes[0];
-    final bytes = yPlane.bytes;
-
-    // Sample every 10th pixel for performance
-    int sum = 0;
-    int count = 0;
-    for (int i = 0; i < bytes.length; i += 10) {
+    final bytes = image.planes[0].bytes;
+    int sum = 0, count = 0;
+    for (int i = 0; i < bytes.length; i += 20) {
       sum += bytes[i];
       count++;
     }
-
     return count > 0 ? sum ~/ count : 0;
   }
 
-  /// STEP 5: Pre-process image (resize and normalize)
-  /// This should ideally run in an Isolate to prevent UI jank
-  Future<List<List<List<List<double>>>>> _preprocessImageInIsolate(
-    CameraImage image,
-  ) async {
-    // Note: Full Isolate implementation would require passing raw bytes
-    // For this example, we'll do it on main thread with optimization
+  List<List<List<List<double>>>> _preprocessToFloat32(CameraImage image) {
+    final rgb = _convertYUV420ToImageFast(image);
 
-    return _preprocessImage(image);
-  }
-
-  /// Convert CameraImage to model input tensor
-  List<List<List<List<double>>>> _preprocessImage(CameraImage image) {
-    // Create RGB image from YUV420
-    final img_lib.Image rgbImage = _convertYUV420ToImage(image);
-
-    // Resize to model input size (416x416)
     final resized = img_lib.copyResize(
-      rgbImage,
+      rgb,
       width: _inputSize,
       height: _inputSize,
+      interpolation: img_lib.Interpolation.average,
     );
 
-    // Normalize to [0, 1] and create 4D tensor [1, 416, 416, 3]
-    final input = List.generate(
-      1,
-      (_) => List.generate(
-        _inputSize,
-        (y) => List.generate(_inputSize, (x) {
-          final pixel = resized.getPixel(x, y);
-          return [
-            pixel.r / 255.0, // Red channel
-            pixel.g / 255.0, // Green channel
-            pixel.b / 255.0, // Blue channel
-          ];
-        }),
-      ),
-    );
-
-    return input;
+    return List.generate(1, (_) {
+      return List.generate(_inputSize, (y) {
+        return List.generate(_inputSize, (x) {
+          final p = resized.getPixel(x, y);
+          return [p.r / 255.0, p.g / 255.0, p.b / 255.0];
+        });
+      });
+    });
   }
 
-  /// Convert YUV420 to RGB Image
-  img_lib.Image _convertYUV420ToImage(CameraImage image) {
-    final int width = image.width;
-    final int height = image.height;
+  img_lib.Image _convertYUV420ToImageFast(CameraImage image) {
+    final w = image.width;
+    final h = image.height;
 
-    final img_lib.Image img = img_lib.Image(width: width, height: height);
+    final out = img_lib.Image(width: w, height: h);
 
     final yPlane = image.planes[0];
     final uPlane = image.planes[1];
     final vPlane = image.planes[2];
 
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int yIndex = y * yPlane.bytesPerRow + x;
-        final int uvIndex = (y ~/ 2) * uPlane.bytesPerRow + (x ~/ 2);
+    final yRowStride = yPlane.bytesPerRow;
+    final uvRowStride = uPlane.bytesPerRow;
+    final uvPixelStride = uPlane.bytesPerPixel ?? 1;
 
-        final int yValue = yPlane.bytes[yIndex];
-        final int uValue = uPlane.bytes[uvIndex];
-        final int vValue = vPlane.bytes[uvIndex];
+    for (int y = 0; y < h; y++) {
+      final yRow = yRowStride * y;
+      final uvRow = uvRowStride * (y >> 1);
 
-        // YUV to RGB conversion
-        int r = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
-        int g = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
-            .clamp(0, 255)
-            .toInt();
-        int b = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
+      for (int x = 0; x < w; x++) {
+        final yIndex = yRow + x;
+        final uvIndex = uvRow + (x >> 1) * uvPixelStride;
 
-        img.setPixelRgb(x, y, r, g, b);
+        final Y = yPlane.bytes[yIndex];
+        final U = uPlane.bytes[uvIndex];
+        final V = vPlane.bytes[uvIndex];
+
+        int r = (Y + (1.370705 * (V - 128))).round();
+        int g = (Y - (0.337633 * (U - 128)) - (0.698001 * (V - 128))).round();
+        int b = (Y + (1.732446 * (U - 128))).round();
+
+        if (r < 0) r = 0;
+        if (g < 0) g = 0;
+        if (b < 0) b = 0;
+        if (r > 255) r = 255;
+        if (g > 255) g = 255;
+        if (b > 255) b = 255;
+
+        out.setPixelRgb(x, y, r, g, b);
       }
     }
-
-    return img;
+    return out;
   }
 
-  /// STEP 6 & 7: Run TFLite inference and get output
-  List<List<double>> _runInference(List<List<List<List<double>>>> input) {
-    // Output shape for YOLOv5: [1, 25200, 85]
-    // 25200 = predictions, 85 = [x, y, w, h, confidence, 80 class scores]
-    var output = List.generate(
+  List<List<double>> _runInferenceDynamic(
+    Interpreter interpreter,
+    List<List<List<List<double>>>> input,
+  ) {
+    final inTensor = interpreter.getInputTensor(0);
+    final outTensor = interpreter.getOutputTensor(0);
+
+    if (!_printedInfoOnce) {
+      _printedInfoOnce = true;
+      debugPrint('input shape=${inTensor.shape} type=${inTensor.type}');
+      debugPrint('output shape=${outTensor.shape} type=${outTensor.type}');
+    }
+
+    final outShape = outTensor.shape; // [1,n,m]
+    if (outShape.length != 3 || outShape[0] != 1) {
+      throw StateError('Unexpected output shape: $outShape');
+    }
+
+    final n = outShape[1];
+    final m = outShape[2];
+
+    final output = List.generate(
       1,
-      (_) => List.generate(25200, (_) => List.filled(85, 0.0)),
+      (_) => List.generate(n, (_) => List.filled(m, 0.0)),
     );
 
-    _interpreter!.run(input, output);
-
-    return output[0]; // Return [25200, 85]
+    interpreter.run(input, output);
+    return output[0];
   }
 
-  /// STEP 11: Announce detections with debouncing
   void _announceDetections(List<DetectionResult> detections) {
-    if (detections.isEmpty) return;
-
-    // Announce top priority detection
-    final topDetection = detections.first;
-    final key = topDetection.turkishLabel;
-
-    _speakWithDebounce(key, topDetection.turkishLabel);
+    final top = detections.first;
+    _speakWithDebounce(top.turkishLabel, top.turkishLabel);
   }
 
-  /// TTS with debounce control
   void _speakWithDebounce(String key, String text) {
     final now = DateTime.now();
-    final lastTime = _lastSpoken[key];
-
-    if (lastTime == null || now.difference(lastTime) > _speakDebounceTime) {
-      _speak(text);
+    final last = _lastSpoken[key];
+    if (last == null || now.difference(last) > _speakDebounceTime) {
+      _speakSafe(text);
       _lastSpoken[key] = now;
     }
   }
 
-  /// Speak text using TTS
-  Future<void> _speak(String text) async {
-    await _flutterTts?.speak(text);
+  Future<void> _speakSafe(String text) async {
+    try {
+      await _flutterTts?.speak(text);
+    } catch (_) {}
   }
 
   @override
@@ -409,166 +416,139 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     );
   }
 
-  /// STEP 2: UI Layout with Stack
   Widget _buildBody() {
     if (!_isCameraReady) {
       return Center(
-        child: Semantics(
-          label: _currentStatusText,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(color: Colors.white),
-              const SizedBox(height: 20),
-              Text(
-                _currentStatusText,
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(color: Colors.white),
+            const SizedBox(height: 20),
+            Text(
+              _currentStatusText,
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
+      );
+    }
+
+    final controller = _cameraController;
+    if (controller == null) {
+      return const Center(
+        child: Text('Kamera kapatıldı', style: TextStyle(color: Colors.white)),
       );
     }
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        // LAYER 1 (Bottom): Camera Preview
-        // CRITICAL: Wrapped in ExcludeSemantics - blind users don't need camera view
-        ExcludeSemantics(child: CameraPreview(_cameraController!)),
+        IgnorePointer(child: CameraPreview(controller)),
 
-        // LAYER 2 (Middle): Bounding boxes
-        if (_detections.isNotEmpty)
+        // Kutular
+        if (_detections.isNotEmpty && controller.value.previewSize != null)
           CustomPaint(
             painter: BoundingBoxPainter(
               detections: _detections,
-              previewSize: _cameraController!.value.previewSize!,
+              previewSize: controller.value.previewSize!,
             ),
           ),
 
-        // LAYER 3 (Overlay): High-contrast status panel at bottom
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 80, // Above FAB
-          child: _buildStatusPanel(),
+        // Status
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 90),
+            child: _buildStatusPanel(),
+          ),
         ),
 
-        // LAYER 4 (Top): Accessible Start/Stop button
-        Positioned(right: 16, bottom: 16, child: _buildControlButton()),
+        // ✅ Button EN ÜSTTE
+        Align(
+          alignment: Alignment.bottomRight,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _buildControlButton(),
+          ),
+        ),
 
-        // Light warning indicator
         if (!_isLightSufficient)
-          Positioned(top: 16, left: 0, right: 0, child: _buildLightWarning()),
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: _buildLightWarning(),
+            ),
+          ),
       ],
     );
   }
 
-  /// STEP 2: High-contrast status panel with MergeSemantics
   Widget _buildStatusPanel() {
-    return MergeSemantics(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.85),
-          border: Border.all(color: Colors.white, width: 3),
-          borderRadius: BorderRadius.circular(12),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.85),
+        border: Border.all(color: Colors.white, width: 2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        _currentStatusText,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Main status text
-            Text(
-              _currentStatusText,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-
-            // Detection count
-            if (_detections.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                '${_detections.length} nesne algılandı',
-                style: const TextStyle(color: Colors.white70, fontSize: 18),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ],
-        ),
+        textAlign: TextAlign.center,
       ),
     );
   }
 
-  /// STEP 2: Large, accessible control button (56x56 minimum)
   Widget _buildControlButton() {
-    return Semantics(
-      button: true,
-      label: _isStreamActive ? 'Algılamayı Durdur' : 'Algılamayı Başlat',
-      onTap: () {
+    return FloatingActionButton.extended(
+      onPressed: () async {
+        debugPrint('FAB clicked. active=$_isStreamActive');
         if (_isStreamActive) {
-          _stopDetection();
+          await _stopDetection();
         } else {
           _startDetection();
         }
       },
-      child: FloatingActionButton.extended(
-        onPressed: () {
-          if (_isStreamActive) {
-            _stopDetection();
-          } else {
-            _startDetection();
-          }
-        },
-        icon: Icon(_isStreamActive ? Icons.stop : Icons.play_arrow),
-        label: Text(
-          _isStreamActive ? 'Durdur' : 'Başlat',
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: _isStreamActive ? Colors.red : Colors.green,
-        foregroundColor: Colors.white,
-        elevation: 8,
-      ),
+      icon: Icon(_isStreamActive ? Icons.stop : Icons.play_arrow),
+      label: Text(_isStreamActive ? 'Durdur' : 'Başlat'),
+      backgroundColor: _isStreamActive ? Colors.red : Colors.green,
+      foregroundColor: Colors.white,
     );
   }
 
-  /// Light warning indicator
   Widget _buildLightWarning() {
-    return MergeSemantics(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.orange.withOpacity(0.9),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.warning, color: Colors.white, size: 28),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Ortam çok karanlık',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.warning, color: Colors.white, size: 24),
+          SizedBox(width: 10),
+          Text(
+            'Ortam çok karanlık',
+            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ],
       ),
     );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopDetection();
     _cameraController?.dispose();
     _interpreter?.close();
     _flutterTts?.stop();

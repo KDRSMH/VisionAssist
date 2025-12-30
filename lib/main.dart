@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'screens/demo_screen.dart';
+import 'screens/object_detection_screen.dart';
+
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +37,7 @@ class MyApp extends StatelessWidget {
         ),
       ),
       // Demo ekranı - gerçek uygulama için object_detection_screen kullanılacak
-      home: const DemoScreen(),
+      home: const ObjectDetectionScreen(),
     );
   }
 }
