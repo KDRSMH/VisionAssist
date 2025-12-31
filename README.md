@@ -192,7 +192,7 @@
 Mobil cihaz kamerası aracılığıyla gerçek zamanlı görüntü alınmasını sağlar. Kamera plugin’i, uygulamanın çevreyi sürekli olarak algılayabilmesi için frame tabanlı veri üretir
 
 ### 2. Frame Preprocessing
-Kameradan alınan görüntü kareleri, nesne tespiti öncesinde ön işleme aşamasından geçirilir. Bu aşamada görüntü yeniden boyutlandırılır, normalize edilir ve YOLOv8 modelinin giriş formatına uygun hale getirilir
+Kameradan alınan görüntü kareleri, nesne tespiti öncesinde ön işleme aşamasından geçirilir. Bu aşamada görüntü yeniden boyutlandırılır, normalize edilir ve YOLO modelinin giriş formatına uygun hale getirilir
 
 ### 3. YOLO TFLite Model
 Ön işlenmiş görüntüler, TensorFlow Lite formatına dönüştürülmüş YOLO modeli ile işlenir. Bu aşamada nesnelerin sınıfları, konumları ve güven skorları hesaplanır. Model, mobil cihaz üzerinde çevrimdışı olarak çalışmaktadır.
