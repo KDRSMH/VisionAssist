@@ -112,17 +112,17 @@
 
 - Mobil cihaz kamerası üzerinden gerçek zamanlı görüntü alınır
 - Görüntüler ön işleme (frame preprocessing) aşamasından geçirilir
-- YOLOv8 TFLite modeli ile nesne tespiti yapılır
+- YOLO TFLite modeli ile nesne tespiti yapılır
 - Güven skoru (confidence) eşik değerine göre filtreleme uygulanır
 - Algılanan nesneler için mesafe/yakınlık tahmini yapılır
 - Yeni ve anlamlı nesneler Türkçe Text-to-Speech ile seslendirilir
 
 ---
 
-## Fonksiyonel Gereksinimler
+### Fonksiyonel Gereksinimler
 
 - **FR-1:** Sistem, mobil cihaz kamerası üzerinden gerçek zamanlı görüntü almalıdır
-- **FR-2:** Sistem, YOLOv8 modeli ile nesne tespiti yapmalıdır
+- **FR-2:** Sistem, YOLO modeli ile nesne tespiti yapmalıdır
 - **FR-3:** Algılanan nesneler için güven skoru hesaplanmalıdır
 - **FR-4:** Güven skoru belirlenen eşik değerin altında olan nesneler yok sayılmalıdır
 - **FR-5:** Algılanan nesneler için mesafe/yakınlık filtresi uygulanmalıdır
@@ -132,7 +132,7 @@
 
 ---
 
-## Fonksiyonel Olmayan Gereksinimler
+### Fonksiyonel Olmayan Gereksinimler
 
 - **NFR-1:** Sistem düşük gecikme süresi ile çalışmalıdır
 - **NFR-2:** Mobil cihaz kaynakları (pil, işlemci) verimli kullanılmalıdır
@@ -170,7 +170,7 @@
 
 ---
 
-## Activity Diagram (Sistem Çalışma Akışı)
+### Activity Diagram (Sistem Çalışma Akışı)
 
 1. Kullanıcı uygulamayı başlatır
 2. Mobil cihaz kamerası aktif hale getirilir
@@ -186,7 +186,7 @@
 
 ---
 
-## Pipeline Diagram (Sistem Mimarisi)
+### Pipeline Diagram (Sistem Mimarisi)
 
 ### 1. Camera Plugin
 Mobil cihaz kamerası aracılığıyla gerçek zamanlı görüntü alınmasını sağlar. Kamera plugin’i, uygulamanın çevreyi sürekli olarak algılayabilmesi için frame tabanlı veri üretir
