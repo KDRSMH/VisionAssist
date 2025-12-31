@@ -195,7 +195,7 @@ Mobil cihaz kamerası aracılığıyla gerçek zamanlı görüntü alınmasını
 Kameradan alınan görüntü kareleri, nesne tespiti öncesinde ön işleme aşamasından geçirilir. Bu aşamada görüntü yeniden boyutlandırılır, normalize edilir ve YOLOv8 modelinin giriş formatına uygun hale getirilir
 
 ### 3. YOLO TFLite Model
-Ön işlenmiş görüntüler, TensorFlow Lite formatına dönüştürülmüş YOLOv8 modeli ile işlenir. Bu aşamada nesnelerin sınıfları, konumları ve güven skorları hesaplanır. Model, mobil cihaz üzerinde çevrimdışı olarak çalışmaktadır.
+Ön işlenmiş görüntüler, TensorFlow Lite formatına dönüştürülmüş YOLO modeli ile işlenir. Bu aşamada nesnelerin sınıfları, konumları ve güven skorları hesaplanır. Model, mobil cihaz üzerinde çevrimdışı olarak çalışmaktadır.
 
 ### 4. Post Processing
 Model çıktıları üzerinde Non-Maximum Suppression (NMS) ve güven skoru eşikleme işlemleri uygulanır. Bu sayede çakışan bounding box’lar elenir ve düşük doğruluklu tahminler sistemden çıkarılır
