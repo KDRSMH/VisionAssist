@@ -3,12 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:image/image.dart' as img_lib;
 
 import '../utils/bounding_box_painter.dart';
-import '../utils/detection_helper.dart';
 import '../models/detection_result.dart';
+import '../services/object_detection_service.dart';
+import '../models/detection.dart';
 
 class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
@@ -20,7 +19,7 @@ class ObjectDetectionScreen extends StatefulWidget {
 class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     with WidgetsBindingObserver {
   CameraController? _cameraController;
-  Interpreter? _interpreter;
+  ObjectDetectionService? _detectionService;
   FlutterTts? _flutterTts;
 
   bool _isModelLoaded = false;
@@ -39,15 +38,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   final Map<String, DateTime> _lastSpoken = {};
   static const Duration _speakDebounceTime = Duration(seconds: 2);
 
-  // Performance / model
-  static const int _inputSize = 320;
-  static const double _confidenceThreshold = 0.25;
-  static const double _iouThreshold = 0.45;
+  // YOLOv5n Model Configuration
   static const int _lightThreshold = 35;
+  static const double _minBboxArea = 300.0;
 
-  // Throttle
+  // Throttle - Inference gap
   DateTime _lastInference = DateTime.fromMillisecondsSinceEpoch(0);
-  static const int _minInferenceGapMs = 250;
+  static const int _minInferenceGapMs = 2000; // 2 seconds
 
   bool _printedInfoOnce = false;
 
@@ -116,7 +113,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     final controller = CameraController(
       cam,
-      ResolutionPreset.low,
+      ResolutionPreset.medium, // low -> medium daha iyi görüntü için
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -133,16 +130,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   Future<void> _loadTFLiteModel() async {
     try {
-      final options = InterpreterOptions()..threads = 4;
-      _interpreter = await Interpreter.fromAsset(
-        'assets/models/yolov5s.tflite',
-        options: options,
-      );
+      _detectionService = ObjectDetectionService();
+      await _detectionService!.initialize();
 
       if (!mounted) return;
       setState(() {
         _isModelLoaded = true;
-        _currentStatusText = 'Model yüklendi';
+        _currentStatusText = 'YOLOv5n Hazır! (416x416)';
       });
 
       _speakSafe('Hazır');
@@ -194,7 +188,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         if (_isDetecting) return;
 
         final now = DateTime.now();
-        if (now.difference(_lastInference).inMilliseconds < _minInferenceGapMs) {
+        if (now.difference(_lastInference).inMilliseconds <
+            _minInferenceGapMs) {
           return;
         }
         _lastInference = now;
@@ -254,32 +249,69 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         setState(() => _isLightSufficient = true);
       }
 
-      final interpreter = _interpreter;
-      if (interpreter == null) return;
+      final service = _detectionService;
+      if (service == null || !service.isInitialized) return;
 
-      final input = _preprocessToFloat32(image);
-      final output = _runInferenceDynamic(interpreter, input);
+      // Measure inference time
+      final stopwatch = Stopwatch()..start();
+      final detectionResults = await service.detect(image);
+      stopwatch.stop();
+      debugPrint('⏱️ YOLOv5n Inference: ${stopwatch.elapsedMilliseconds}ms');
+      debugPrint('   Total detections found: ${detectionResults.length}');
 
-      final detections = DetectionHelper.parseYoloOutputDynamic(
-        output,
-        inputSize: _inputSize,
-        originalWidth: image.width,
-        originalHeight: image.height,
-        confThreshold: _confidenceThreshold,
-      );
+      // Convert Detection to DetectionResult
+      final detections = <DetectionResult>[];
+      for (var detection in detectionResults) {
+        // Filter small boxes
+        if (detection.area < _minBboxArea) {
+          debugPrint(
+            'Skipped (too small): ${detection.label} area=${detection.area.toInt()}',
+          );
+          continue;
+        }
 
-      final nms = DetectionHelper.nonMaxSuppression(detections, _iouThreshold);
-      final prioritized = DetectionHelper.prioritizeDetections(nms);
+        detections.add(
+          DetectionResult(
+            label: detection.label,
+            turkishLabel: detection.label, // Already Turkish from model
+            confidence: detection.confidence,
+            classId: detection.classId,
+            priority: _getPriority(detection.label),
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+          ),
+        );
+
+        debugPrint(
+          '✓ ${detection.label}: ${(detection.confidence * 100).toStringAsFixed(1)}% area=${detection.area.toInt()}',
+        );
+      }
+
+      // Sort by confidence (highest first) with STRICT 60% filtering
+      detections.sort((a, b) => b.confidence.compareTo(a.confidence));
 
       if (!mounted) return;
       setState(() {
-        _detections = prioritized;
-        _currentStatusText = prioritized.isNotEmpty
-            ? prioritized.first.turkishLabel
-            : 'Nesne algılanmadı';
+        _detections = detections;
+        if (detections.isNotEmpty) {
+          final top = detections.first;
+          _currentStatusText =
+              '${top.turkishLabel} (${(top.confidence * 100).toStringAsFixed(0)}%)';
+          debugPrint(
+            '🎯 Top detection: ${top.turkishLabel} ${(top.confidence * 100).toStringAsFixed(1)}%',
+          );
+        } else {
+          _currentStatusText = 'Nesne algılanmadı';
+          debugPrint('❌ No detections after filtering');
+        }
       });
 
-      if (prioritized.isNotEmpty) _announceDetections(prioritized);
+      // Announce top detection only
+      if (detections.isNotEmpty) {
+        _announceDetections(detections.take(1).toList());
+      }
     } catch (e) {
       debugPrint('Detection error: $e');
     }
@@ -295,102 +327,31 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     return count > 0 ? sum ~/ count : 0;
   }
 
-  List<List<List<List<double>>>> _preprocessToFloat32(CameraImage image) {
-    final rgb = _convertYUV420ToImageFast(image);
-
-    final resized = img_lib.copyResize(
-      rgb,
-      width: _inputSize,
-      height: _inputSize,
-      interpolation: img_lib.Interpolation.average,
-    );
-
-    return List.generate(1, (_) {
-      return List.generate(_inputSize, (y) {
-        return List.generate(_inputSize, (x) {
-          final p = resized.getPixel(x, y);
-          return [p.r / 255.0, p.g / 255.0, p.b / 255.0];
-        });
-      });
-    });
-  }
-
-  img_lib.Image _convertYUV420ToImageFast(CameraImage image) {
-    final w = image.width;
-    final h = image.height;
-
-    final out = img_lib.Image(width: w, height: h);
-
-    final yPlane = image.planes[0];
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-
-    final yRowStride = yPlane.bytesPerRow;
-    final uvRowStride = uPlane.bytesPerRow;
-    final uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    for (int y = 0; y < h; y++) {
-      final yRow = yRowStride * y;
-      final uvRow = uvRowStride * (y >> 1);
-
-      for (int x = 0; x < w; x++) {
-        final yIndex = yRow + x;
-        final uvIndex = uvRow + (x >> 1) * uvPixelStride;
-
-        final Y = yPlane.bytes[yIndex];
-        final U = uPlane.bytes[uvIndex];
-        final V = vPlane.bytes[uvIndex];
-
-        int r = (Y + (1.370705 * (V - 128))).round();
-        int g = (Y - (0.337633 * (U - 128)) - (0.698001 * (V - 128))).round();
-        int b = (Y + (1.732446 * (U - 128))).round();
-
-        if (r < 0) r = 0;
-        if (g < 0) g = 0;
-        if (b < 0) b = 0;
-        if (r > 255) r = 255;
-        if (g > 255) g = 255;
-        if (b > 255) b = 255;
-
-        out.setPixelRgb(x, y, r, g, b);
-      }
-    }
-    return out;
-  }
-
-  List<List<double>> _runInferenceDynamic(
-    Interpreter interpreter,
-    List<List<List<List<double>>>> input,
-  ) {
-    final inTensor = interpreter.getInputTensor(0);
-    final outTensor = interpreter.getOutputTensor(0);
-
-    if (!_printedInfoOnce) {
-      _printedInfoOnce = true;
-      debugPrint('input shape=${inTensor.shape} type=${inTensor.type}');
-      debugPrint('output shape=${outTensor.shape} type=${outTensor.type}');
-    }
-
-    final outShape = outTensor.shape; // [1,n,m]
-    if (outShape.length != 3 || outShape[0] != 1) {
-      throw StateError('Unexpected output shape: $outShape');
-    }
-
-    final n = outShape[1];
-    final m = outShape[2];
-
-    final output = List.generate(
-      1,
-      (_) => List.generate(n, (_) => List.filled(m, 0.0)),
-    );
-
-    interpreter.run(input, output);
-    return output[0];
-  }
-
   void _announceDetections(List<DetectionResult> detections) {
     final top = detections.first;
     _speakWithDebounce(top.turkishLabel, top.turkishLabel);
+  }
+
+  DetectionPriority _getPriority(String label) {
+    // Priority mapping for 8 COCO classes (Turkish)
+    const highPriority = {
+      'araba', // car - high priority for navigation
+      'motosiklet', // motorcycle - high priority
+      'bisiklet', // bicycle - high priority
+    };
+    const mediumPriority = {
+      'insan', // person - medium priority
+      'kedi', // cat - medium priority
+      'köpek', // dog - medium priority
+    };
+    const lowPriority = {
+      'sandalye', // chair - low priority
+      'masa', // dining table - low priority (updated from 'yemek masası')
+    };
+
+    if (highPriority.contains(label)) return DetectionPriority.high;
+    if (mediumPriority.contains(label)) return DetectionPriority.medium;
+    return DetectionPriority.low;
   }
 
   void _speakWithDebounce(String key, String text) {
@@ -444,7 +405,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     return Stack(
       fit: StackFit.expand,
       children: [
-        IgnorePointer(child: CameraPreview(controller)),
+        // 3:4 aspect ratio için kamerayı center'la (dikey)
+        Center(
+          child: AspectRatio(
+            aspectRatio: 3 / 4,
+            child: IgnorePointer(child: CameraPreview(controller)),
+          ),
+        ),
 
         // Kutular
         if (_detections.isNotEmpty && controller.value.previewSize != null)
@@ -538,7 +505,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
           SizedBox(width: 10),
           Text(
             'Ortam çok karanlık',
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ],
       ),
@@ -548,10 +519,22 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopDetection();
+
+    // Önce stream'i durdur
+    try {
+      final controller = _cameraController;
+      if (controller != null && controller.value.isStreamingImages) {
+        controller.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('dispose stopImageStream error: $e');
+    }
+
+    // Sonra controller'ı dispose et
     _cameraController?.dispose();
-    _interpreter?.close();
+    _detectionService?.dispose();
     _flutterTts?.stop();
+
     super.dispose();
   }
 }

@@ -59,13 +59,8 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/models/yolov5s.tflite
-
-  # Assets for TFLite model and labels
-  # NOT: Model dosyasını indirdikten sonra bu satırları aktif edin
-  # assets:
-  #   - assets/models/yolov5s.tflite
-  #   - assets/models/labels.txt
+    - assets/models/yolov5n.tflite
+    - assets/labels.txt
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

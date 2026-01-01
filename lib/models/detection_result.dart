@@ -58,3 +58,9 @@ enum DetectionPriority {
   medium, // Caution: animals, bicycles
   low, // Regular objects
 }
+
+extension DetectionPriorityExtension on DetectionPriority {
+  int compareTo(DetectionPriority other) {
+    return index.compareTo(other.index);
+  }
+}
