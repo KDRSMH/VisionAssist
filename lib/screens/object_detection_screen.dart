@@ -7,7 +7,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../utils/bounding_box_painter.dart';
 import '../models/detection_result.dart';
 import '../services/object_detection_service.dart';
-import '../models/detection.dart';
 
 class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
@@ -38,15 +37,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   final Map<String, DateTime> _lastSpoken = {};
   static const Duration _speakDebounceTime = Duration(seconds: 2);
 
-  // YOLOv5n Model Configuration
+  // YOLOv5n Model Configuration - Optimized for new 9-class model
   static const int _lightThreshold = 35;
   static const double _minBboxArea = 300.0;
+  static const double _minConfidenceForAnnouncement = 0.38; // 38% - balanced threshold for voice announcements
 
-  // Throttle - Inference gap
+  // Throttle - Inference gap - Optimized for better responsiveness
   DateTime _lastInference = DateTime.fromMillisecondsSinceEpoch(0);
-  static const int _minInferenceGapMs = 2000; // 2 seconds
-
-  bool _printedInfoOnce = false;
+  static const int _minInferenceGapMs = 500; // 500ms - faster detection updates
 
   @override
   void initState() {
@@ -136,7 +134,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       if (!mounted) return;
       setState(() {
         _isModelLoaded = true;
-        _currentStatusText = 'YOLOv5n Hazır! (416x416)';
+        _currentStatusText = 'YOLOv5n Hazır! (416x416, 8 sınıf)';
       });
 
       _speakSafe('Hazır');
@@ -308,9 +306,12 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         }
       });
 
-      // Announce top detection only
+      // Announce top detection only (with confidence filter)
       if (detections.isNotEmpty) {
-        _announceDetections(detections.take(1).toList());
+        final topDetection = detections.first;
+        if (topDetection.confidence >= _minConfidenceForAnnouncement) {
+          _announceDetections([topDetection]);
+        }
       }
     } catch (e) {
       debugPrint('Detection error: $e');
@@ -333,24 +334,20 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   }
 
   DetectionPriority _getPriority(String label) {
-    // Priority mapping for 8 COCO classes (Turkish)
+    // Priority mapping for 8 classes (Door, Motorbike, bike, car, chair, dustbin, human, table)
     const highPriority = {
-      'araba', // car - high priority for navigation
-      'motosiklet', // motorcycle - high priority
-      'bisiklet', // bicycle - high priority
+      'car',         // car - navigation critical
+      'Motorbike',   // motorbike - navigation critical
+      'bike',        // bike - navigation critical
     };
     const mediumPriority = {
-      'insan', // person - medium priority
-      'kedi', // cat - medium priority
-      'köpek', // dog - medium priority
-    };
-    const lowPriority = {
-      'sandalye', // chair - low priority
-      'masa', // dining table - low priority (updated from 'yemek masası')
+      'human',       // human - safety important
+      'Door',        // Door - navigation relevant
     };
 
     if (highPriority.contains(label)) return DetectionPriority.high;
     if (mediumPriority.contains(label)) return DetectionPriority.medium;
+    // Low priority: chair, dustbin, table
     return DetectionPriority.low;
   }
 

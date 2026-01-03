@@ -1,36 +1,22 @@
-# Model Klasörü
+# YOLOv5 Nano Model
 
-## Yeni Model Ekleme
+**Dosya:** `yolov5n.tflite`
+**Boyut:** ~14 MB
+**Format:** TensorFlow Lite Float32
+**Giriş:** [1, 416, 416, 3] - RGB görüntü
+**Çıkış:** [1, 10647, 13] - Detections
 
-1. **Model dosyasını** buraya kopyala:
-   - Dosya adı: `model.tflite`
-   
-2. **Label dosyasını** (opsiyonel) buraya ekle:
-   - Dosya adı: `labels.txt`
-   - Format: Her satırda bir sınıf ismi
+## Sınıflar (8 adet)
+0. insan (person)
+1. bisiklet (bicycle)
+2. araba (car)
+3. motosiklet (motorcycle)
+4. kedi (cat)
+5. köpek (dog)
+6. sandalye (chair)
+7. masa (dining table)
 
-3. **Kod güncellemesi** gerekirse:
-   - `lib/screens/object_detection_screen.dart` dosyasını aç
-   - `_inputSize` parametresini modelinize göre ayarlayın (örn: 320, 416, 640)
-   - `_confidenceThreshold` değerini test ederek optimize edin
-   - Label mapping'i ekleyin (satır ~280)
-
-## Mevcut Durum
-
-✅ YOLOv8 ve COCO dataset temizlendi
-✅ Kod generic hale getirildi
-✅ Yeni model için hazır
-
-## Örnek Kullanım
-
-```bash
-# Modelinizi buraya kopyalayın
-cp /path/to/your/model.tflite assets/models/
-
-# Labels varsa
-cp /path/to/your/labels.txt assets/models/
-
-# Flutter'ı yeniden build edin
-flutter clean
-flutter build apk
-```
+## Kullanım
+- Minimum güven: %45
+- Single Focus Mode: Sadece en güvenli nesne algılanır
+- Koordinat sistemi: Kamera görüntü boyutuna göre pixel koordinatları

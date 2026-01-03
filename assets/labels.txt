@@ -1,0 +1,8 @@
+Door
+Motorbike
+bike
+car
+chair
+dustbin
+human
+table
