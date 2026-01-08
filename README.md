@@ -1,8 +1,8 @@
 Projeyi Hazırlayanlar:
-Semih Kadir Yıldırım
-İbrahim Uluer
-Enes Yarbaş
-Mert Kutlukaya
+- Semih Kadir Yıldırım
+- İbrahim Uluer
+- Enes Yarbaş
+- Mert Kutlukaya
 
 
 # VisionAssist
