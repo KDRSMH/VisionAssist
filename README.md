@@ -1,3 +1,10 @@
+Projeyi Hazırlayanlar:
+Semih Kadir Yıldırım
+İbrahim Uluer
+Enes Yarbaş
+Mert Kutlukaya
+
+
 # VisionAssist
 ![](https://github.com/KDRSMH/VisionAssist/blob/be8c4e715c57c45b414ba520e85a8bac388ee083/img/1.png?raw=true) ![](https://github.com/KDRSMH/VisionAssist/blob/be8c4e715c57c45b414ba520e85a8bac388ee083/img/2.png?raw=true)
 
