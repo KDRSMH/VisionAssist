@@ -2,7 +2,7 @@ Projeyi Hazırlayanlar:
 - Semih Kadir Yıldırım
 - İbrahim Uluer
 - Enes Yarbaş
-- Mert Kutlukaya
+- Mehmet Mert Kutlukaya
 - Muhammet Demir
 
 
