@@ -3,6 +3,7 @@ Projeyi Hazırlayanlar:
 - İbrahim Uluer
 - Enes Yarbaş
 - Mert Kutlukaya
+- Muhammet Demir
 
 
 # VisionAssist
